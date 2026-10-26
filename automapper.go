@@ -395,19 +395,78 @@ func (c *Client) Get(ctx context.Context, id string) (*Map, error) {
 	return &m, nil
 }
 
+// Event names passed to an OnUpdate callback.
+const (
+	EventSubmitted = "submitted" // upload accepted; Map.MapURL is already valid
+	EventQueued    = "queued"    // waiting; Map.Position says where (fires when it changes)
+	EventStarted   = "started"   // the map began generating
+	EventDone      = "done"      // finished; Map.DownloadURL and Map.MapURL are set
+	EventFailed    = "failed"    // Map.Message says why
+)
+
+// Update describes a change in a map's progress.
+type Update struct {
+	Event string
+	Map   *Map
+	Job   *Job // only set on EventSubmitted
+}
+
+type callOpts struct{ onUpdate func(Update) }
+
+// CallOption customises Wait, Generate and GenerateAndSave.
+type CallOption func(*callOpts)
+
+// OnUpdate registers a callback for progress: submitted, queued (with
+// position), started, then done (with the final URLs) or failed. It runs on
+// the calling goroutine, so keep it quick.
+func OnUpdate(fn func(Update)) CallOption { return func(o *callOpts) { o.onUpdate = fn } }
+
+func (o *callOpts) emit(u Update) {
+	if o.onUpdate != nil {
+		o.onUpdate(u)
+	}
+}
+
+func newCallOpts(opts []CallOption) *callOpts {
+	o := &callOpts{}
+	for _, f := range opts {
+		f(o)
+	}
+	return o
+}
+
 // Wait polls until the map is done. It returns a *FailedError if the map failed.
-func (c *Client) Wait(ctx context.Context, id string) (*Map, error) {
+func (c *Client) Wait(ctx context.Context, id string, opts ...CallOption) (*Map, error) {
+	return c.wait(ctx, id, newCallOpts(opts))
+}
+
+func (c *Client) wait(ctx context.Context, id string, o *callOpts) (*Map, error) {
+	lastStatus, lastPos := "", -1
 	for {
 		m, err := c.Get(ctx, id)
 		if err != nil {
 			return nil, err
 		}
 		switch m.Status {
+		case StatusQueued:
+			if lastStatus != StatusQueued || m.Position != lastPos {
+				o.emit(Update{Event: EventQueued, Map: m})
+			}
+		case StatusRunning:
+			if lastStatus != StatusRunning {
+				o.emit(Update{Event: EventStarted, Map: m})
+			}
 		case StatusDone:
+			if lastStatus == StatusQueued {
+				o.emit(Update{Event: EventStarted, Map: m}) // finished between polls
+			}
+			o.emit(Update{Event: EventDone, Map: m})
 			return m, nil
 		case StatusFailed:
+			o.emit(Update{Event: EventFailed, Map: m})
 			return m, &FailedError{Map: m}
 		}
+		lastStatus, lastPos = m.Status, m.Position
 		select {
 		case <-ctx.Done():
 			return m, ctx.Err()
@@ -416,19 +475,24 @@ func (c *Client) Wait(ctx context.Context, id string) (*Map, error) {
 	}
 }
 
-// Generate does it all: upload the file, wait, and return the finished map.
-// Use ctx for a timeout (maps usually take one to three minutes).
-func (c *Client) Generate(ctx context.Context, audioPath string, s Settings) (*Map, error) {
+// Generate does it all: upload the file, wait, and return the finished map
+// (with DownloadURL and MapURL). Use ctx for a timeout; maps usually take one
+// to three minutes. Pass OnUpdate to follow progress.
+func (c *Client) Generate(ctx context.Context, audioPath string, s Settings, opts ...CallOption) (*Map, error) {
+	o := newCallOpts(opts)
 	job, err := c.CreateFromFile(ctx, audioPath, s)
 	if err != nil {
 		return nil, err
 	}
-	return c.Wait(ctx, job.ID)
+	o.emit(Update{Event: EventSubmitted, Job: job, Map: &Map{
+		ID: job.ID, Status: job.Status, MapURL: job.MapURL, Title: s.Title, Artist: s.Artist,
+	}})
+	return c.wait(ctx, job.ID, o)
 }
 
 // GenerateAndSave is Generate followed by downloading the result to destPath.
-func (c *Client) GenerateAndSave(ctx context.Context, audioPath, destPath string, s Settings) (*Map, error) {
-	m, err := c.Generate(ctx, audioPath, s)
+func (c *Client) GenerateAndSave(ctx context.Context, audioPath, destPath string, s Settings, opts ...CallOption) (*Map, error) {
+	m, err := c.Generate(ctx, audioPath, s, opts...)
 	if err != nil {
 		return m, err
 	}

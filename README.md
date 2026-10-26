@@ -71,6 +71,30 @@ Set any of these on `automapper.Settings`; leave them out to use the defaults.
 | `Descriptors` | `[]string` | e.g. `[]string{"jumps/wide"}`, needs `GoAstray` |
 | `Game` | `string` | Only `"osu"` (the default) works for now |
 
+## Follow progress
+
+Pass `OnUpdate` to `Generate`, `GenerateAndSave` or `Wait` to hear about each stage, not just the end:
+
+```go
+m, err := c.Generate(ctx, "song.mp3", settings, automapper.OnUpdate(func(u automapper.Update) {
+	switch u.Event {
+	case automapper.EventSubmitted: // upload accepted, page already exists
+		fmt.Println("queued upload:", u.Map.MapURL)
+	case automapper.EventQueued: // fires again when the position changes
+		fmt.Println("waiting, position", u.Map.Position)
+	case automapper.EventStarted: // generation began
+		fmt.Println("started generating")
+	case automapper.EventDone:
+		fmt.Println("page:", u.Map.MapURL)
+		fmt.Println("file:", u.Map.DownloadURL)
+	case automapper.EventFailed:
+		fmt.Println("failed:", u.Map.Message)
+	}
+}))
+```
+
+The returned `*Map` also carries both `MapURL` (the web page) and `DownloadURL` (the file), plus `SHA256`, `Size`, and timestamps.
+
 ## Step by step
 
 ```go

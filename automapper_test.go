@@ -219,3 +219,48 @@ func TestMe(t *testing.T) {
 		t.Fatalf("me=%+v err=%v", me, err)
 	}
 }
+
+func TestGenerateOnUpdateEvents(t *testing.T) {
+	var polls int32
+	var srvURL string
+	c := newTest(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "POST":
+			w.WriteHeader(202)
+			io.WriteString(w, `{"id":"abc","status":"queued","map_url":"https://x/map/abc"}`)
+		default:
+			switch atomic.AddInt32(&polls, 1) {
+			case 1:
+				io.WriteString(w, `{"id":"abc","status":"queued","position":2}`)
+			case 2:
+				io.WriteString(w, `{"id":"abc","status":"queued","position":1}`)
+			case 3:
+				io.WriteString(w, `{"id":"abc","status":"running"}`)
+			case 4:
+				io.WriteString(w, `{"id":"abc","status":"running"}`)
+			default:
+				io.WriteString(w, `{"id":"abc","status":"done","map_url":"https://x/map/abc","download_url":"`+srvURL+`/dl.osz"}`)
+			}
+		}
+	})
+	srvURL = c.baseURL
+	audio := filepath.Join(t.TempDir(), "s.mp3")
+	os.WriteFile(audio, []byte("A"), 0o644)
+
+	var events []string
+	var last Update
+	m, err := c.Generate(context.Background(), audio, valid(), OnUpdate(func(u Update) {
+		events = append(events, u.Event)
+		last = u
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "submitted queued queued started done"
+	if got := strings.Join(events, " "); got != want {
+		t.Errorf("events = %q, want %q", got, want)
+	}
+	if last.Map.DownloadURL == "" || last.Map.MapURL != "https://x/map/abc" || m.DownloadURL != last.Map.DownloadURL {
+		t.Errorf("final update = %+v", last.Map)
+	}
+}
