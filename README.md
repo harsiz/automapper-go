@@ -42,6 +42,35 @@ func main() {
 
 `GenerateAndSave` uploads, polls until finished, and downloads. Maps usually take 1–3 minutes, so give the context a generous timeout.
 
+## All you need
+
+Five required fields and your key. Everything else is optional.
+
+```go
+c := automapper.New(os.Getenv("AUTOMAPPER_KEY"))
+c.GenerateAndSave(ctx, "song.mp3", "map.osz", automapper.Settings{
+	Format: automapper.FormatOsz, Title: "Song", Artist: "Artist", StarRating: 5, Year: 2018,
+})
+```
+
+## Optional fields
+
+Set any of these on `automapper.Settings`; leave them out to use the defaults.
+
+| Field | Type | What it does |
+| --- | --- | --- |
+| `ArtistRomanised` | `string` | Artist in Latin letters (defaults to `Artist`) |
+| `Mapper` | `string` | Creator name in the map (defaults to `AutoMapper`) |
+| `Tags` | `string` | Space separated tags |
+| `MapperID` | `int` | osu! user id whose mapping style to imitate |
+| `HP`, `AR`, `CS`, `OD` | `*float64` | 0 to 10. Leave `nil` to let the model pick (`automapper.Float(8)`) |
+| `SliderTickRate` | `float64` | One of `0.5`, `1`, `2`, `3`, `4` |
+| `Background` | `*bool` | Anime wallpaper behind `osz` maps, on by default (`automapper.Bool(false)` to turn off) |
+| `GoAstray` | `bool` | Unlocks `CfgScale` and `Descriptors` |
+| `CfgScale` | `*float64` | 1 to 3, needs `GoAstray` |
+| `Descriptors` | `[]string` | e.g. `[]string{"jumps/wide"}`, needs `GoAstray` |
+| `Game` | `string` | Only `"osu"` (the default) works for now |
+
 ## Step by step
 
 ```go
